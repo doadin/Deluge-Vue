@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  #deluge:
+  #  image: linuxserver/deluge:latest
+  #  container_name: deluge
+  #  environment:
+  #    - PUID=1000
+  #    - PGID=1000
+  #    - TZ=America/New_York
+  #  volumes:
+  #    - ./deluge/config:/config
+  #    - ./deluge/downloads:/downloads
+  #  ports:
+  #    - "8113:8113"   # Deluge Web (optional)
+  #    - "58846:58846" # RPC
+  #  restart: unless-stopped
+
+  deluge-vueui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deluge-vueui
+    #depends_on:
+    #  - deluge
+    ports:
+      - "8080:80"
+    restart: unless-stopped
