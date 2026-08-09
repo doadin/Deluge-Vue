@@ -1,5 +1,7 @@
 <template>
-  <TorrentList />
+  <div class="app-shell">
+    <TorrentList />
+  </div>
 </template>
 
 <script setup>

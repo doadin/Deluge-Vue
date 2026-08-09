@@ -4,6 +4,42 @@ export default class DelugeClient {
       this.password = password;
       this.sessionId = null;
       this.passwordPrompted = false;
+      this.loggedIn = false;
+      this.storageKey = "deluge-client-state";
+      this.restoreSession();
+    }
+
+    restoreSession() {
+      if (typeof window === "undefined") return;
+
+      try {
+        const raw = window.sessionStorage.getItem(this.storageKey);
+        if (!raw) return;
+
+        const stored = JSON.parse(raw);
+        if (stored.sessionId) {
+          this.sessionId = stored.sessionId;
+          this.loggedIn = true;
+        }
+        if (stored.password) {
+          this.password = stored.password;
+        }
+      } catch (error) {
+        console.warn("Unable to restore Deluge session", error);
+      }
+    }
+
+    persistSession() {
+      if (typeof window === "undefined") return;
+
+      try {
+        window.sessionStorage.setItem(this.storageKey, JSON.stringify({
+          sessionId: this.sessionId,
+          password: this.password,
+        }));
+      } catch (error) {
+        console.warn("Unable to persist Deluge session", error);
+      }
     }
 
     async promptForPassword() {
@@ -18,6 +54,7 @@ export default class DelugeClient {
 
       this.password = enteredPassword;
       this.passwordPrompted = true;
+      this.persistSession();
       return enteredPassword;
     }
 
@@ -47,6 +84,7 @@ export default class DelugeClient {
       const newSession = res.headers.get("X-Deluge-Session");
       if (newSession) {
         this.sessionId = newSession;
+        this.persistSession();
       }
     
       if (data.error) {
@@ -57,13 +95,28 @@ export default class DelugeClient {
     }
 
     async login() {
-      const result = await this.rpc("auth.login", [this.password]);
-  
-      if (!result) {
-        throw new Error("Deluge login failed");
+      if (this.loggedIn && this.sessionId) {
+        return true;
       }
-  
-      return true;
+
+      try {
+        const result = await this.rpc("auth.login", [this.password]);
+
+        if (!result) {
+          throw new Error("Deluge login failed");
+        }
+
+        this.loggedIn = true;
+        this.persistSession();
+        return true;
+      } catch (error) {
+        if (!this.passwordPrompted) {
+          await this.promptForPassword();
+          return this.login();
+        }
+
+        throw error;
+      }
     }
 
     async getTorrents() {
@@ -74,7 +127,14 @@ export default class DelugeClient {
                 "progress",
                 "download_speed",
                 "upload_speed",
-                "eta"
+                "eta",
+                "total_size",
+                "time_added",
+                "total_done",
+                "total_uploaded",
+                "download_payload_rate",
+                "upload_payload_rate",
+                "ratio"
             ],
             {}
         ]);
@@ -204,6 +264,22 @@ export default class DelugeClient {
     async getConfig() {
         return this.rpc("core.get_config", []);
     }
+
+    async getWebConfig() {
+        return this.rpc("web.get_config", []);
+    }
+
+    async getSessionStatus(keys = []) {
+        return this.rpc("core.get_session_status", [keys]);
+    }
+
+    async getFreeSpace(path) {
+        return this.rpc("core.get_free_space", [path]);
+    }
+
+    async getExternalIp() {
+        return this.rpc("core.get_external_ip", []);
+    }
     
     async setConfig(options) {
         return this.rpc("core.set_config", [options]);
@@ -225,4 +301,23 @@ export default class DelugeClient {
         return this.rpc("core.disable_plugin", [name]);
     }
 
+}
+
+let sharedClientInstance = null;
+
+export function getDelugeClient(baseUrl = "/api", password = null) {
+  if (!sharedClientInstance) {
+    sharedClientInstance = new DelugeClient(baseUrl, password ?? "70ce453b201ea01ef869c8da62009ed91fb4d83a");
+  }
+
+  if (baseUrl) {
+    sharedClientInstance.baseUrl = baseUrl;
+  }
+
+  if (password !== null && password !== undefined) {
+    sharedClientInstance.password = password;
+    sharedClientInstance.persistSession();
+  }
+
+  return sharedClientInstance;
 }
