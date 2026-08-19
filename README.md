@@ -42,7 +42,7 @@ This project expects Deluge to be accessible through a proxy at `/api/json`, wit
 
 If you like this project and want to support development, you can donate via PayPal:
 
-[Donate to Deluge-Vue](https://paypal.me/doadin)
+[Donate to Deluge-Vue](https://www.paypal.com/cgi-bin/webscr?cn=Add+special+instructions+to+the+addon+author()&business=doadindonates%40gmail.com&bn=PP-DonationsBF:btn_donateCC_LG.gif:NonHosted&lc=US&item_name=Deluge-Vue&cmd=_donations&rm=1&no_shipping=1&currency_code=USD)
 
 Or send directly to: `doadindonates@gmail.com`
 
