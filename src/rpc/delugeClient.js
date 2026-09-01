@@ -108,6 +108,13 @@ export default class DelugeClient {
 
         this.loggedIn = true;
         this.persistSession();
+        try {
+          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            window.dispatchEvent(new CustomEvent('webui-logged-in', { detail: { baseUrl: this.baseUrl } }));
+          }
+        } catch (e) {
+          console.debug('Could not dispatch webui-logged-in event', e);
+        }
         return true;
       } catch (error) {
         if (!this.passwordPrompted) {
@@ -117,6 +124,10 @@ export default class DelugeClient {
 
         throw error;
       }
+    }
+
+    async getHosts() {
+        return this.rpc("web.get_hosts", []);
     }
 
     async getTorrents() {

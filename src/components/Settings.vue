@@ -10,7 +10,7 @@ const props = defineProps({
 });
 const emit = defineEmits(["close"]);
 
-const client = getDelugeClient("/api");
+const client = getDelugeClient();
 const config = ref(null);
 const saving = ref(false);
 const loading = ref(true);

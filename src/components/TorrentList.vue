@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { getDelugeClient } from "../rpc/delugeClient";
 import Settings from "./Settings.vue";
 
-const client = getDelugeClient("/api");
+const client = getDelugeClient();
 const torrents = ref([]);
 const selectedTorrent = ref(null);
 const sortKey = ref("name");
