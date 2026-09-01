@@ -10,6 +10,7 @@ const sortKey = ref("name");
 const sortOrder = ref("asc");
 const searchQuery = ref("");
 const showSettings = ref(false);
+const selectedState = ref('all');
 let refreshTimer = null;
 
 const formatBytes = (value) => {
@@ -68,6 +69,46 @@ const formatDate = (value) => {
   return date.toLocaleString();
 };
 
+// Sidebar counts by torrent state
+const activeCount = computed(() => {
+  return torrents.value.filter((t) => {
+    const s = String(t.state || '').toLowerCase();
+    return Number(t.download_speed || 0) > 0 || Number(t.upload_speed || 0) > 0;
+  }).length;
+});
+
+const downloadingCount = computed(() => {
+  return torrents.value.filter((t) => {
+    const s = String(t.state || '').toLowerCase();
+    return s.includes('downloading');
+  }).length;
+});
+
+const checkingCount = computed(() => {
+  return torrents.value.filter((t) => {
+    const s = String(t.state || '').toLowerCase();
+    return s.includes('checking');
+  }).length;
+});
+
+const errorCount = computed(() => {
+  return torrents.value.filter((t) => {
+    const s = String(t.state || '').toLowerCase();
+    return s.includes('error');
+  }).length;
+});
+
+const seedingCount = computed(() => {
+  return torrents.value.filter((t) => String(t.state || '').toLowerCase().includes('seeding')).length;
+});
+
+const pausedCount = computed(() => {
+  return torrents.value.filter((t) => {
+    const s = String(t.state || '').toLowerCase();
+    return s.includes('pause') || s.includes('paused') || s.includes('stopped');
+  }).length;
+});
+
 const filteredTorrents = () => {
   const query = searchQuery.value.trim().toLowerCase();
   const source = query
@@ -78,7 +119,32 @@ const filteredTorrents = () => {
       })
     : torrents.value;
 
-  const sorted = [...source];
+  // filter by selected sidebar state
+  const stateFiltered = source.filter((t) => {
+    if (selectedState.value === 'all') return true;
+    const s = String(t.state || '').toLowerCase();
+    const dl = Number(t.download_speed || 0);
+    const ul = Number(t.upload_speed || 0);
+
+    switch (selectedState.value) {
+      case 'active':
+        return dl > 0 || ul > 0;
+      case 'downloading':
+        return s.includes('downloading') || (dl > 0 && !s.includes('seeding'));
+      case 'checking':
+        return s.includes('checking');
+      case 'seeding':
+        return s.includes('seeding');
+      case 'paused':
+        return s.includes('pause') || s.includes('paused') || s.includes('stopped') || s.includes('queued');
+      case 'error':
+        return s.includes('error');
+      default:
+        return true;
+    }
+  });
+
+  const sorted = [...stateFiltered];
   sorted.sort((a, b) => {
     let left = a[sortKey.value];
     let right = b[sortKey.value];
@@ -324,33 +390,38 @@ onUnmounted(() => {
     <div class="sidebar">
       <div class="sidebar-section">
         <h4>States</h4>
-        <button class="sidebar-button">All ({{ torrents.length }})</button>
-        <button class="sidebar-button">Active ({{ activeCount }})</button>
-        <button class="sidebar-button">Seeding ({{ seedingCount }})</button>
-        <button class="sidebar-button">Paused ({{ pausedCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'all'">All ({{ torrents.length }})</button>
+          <button class="sidebar-button" @click="selectedState = 'active'">Active ({{ activeCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'checking'">Checking ({{ checkingCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'downloading'">Downloading ({{ downloadingCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'seeding'">Seeding ({{ seedingCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'paused'">Paused ({{ pausedCount }})</button>
+          <button class="sidebar-button" @click="selectedState = 'error'">Error ({{ errorCount }})</button>
       </div>
 
       <div class="sidebar-section">
         <h4>Trackers</h4>
-        <button class="sidebar-button">Trackers ({{ torrents.length }})</button>
+        <button class="sidebar-button" @click="selectedTracker = null">Trackers ({{ torrents.length }})</button>
       </div>
 
       <div class="sidebar-section">
         <h4>Owner</h4>
-        <button class="sidebar-button">Admin ({{ torrents.length }})</button>
+        <button class="sidebar-button" @click="selectedOwner = 'admin'">Admin ({{ torrents.length }})</button>
       </div>
     </div>
 
     <!-- TOP TOOLBAR -->
+     <!-- 
     <div class="torrent-toolbar">
       <div>
         <h2>Torrents</h2>
         <p>{{ torrents.length }} active torrents</p>
       </div>
     </div>
+     -->
 
     <!-- ACTION BAR BELOW TOOLBAR -->
-    <div class="action-bar">
+    <div class="torrent-toolbar">
       <div class="action-group">
         <button class="toolbar-button accent" @click="handleAddTorrent">Add</button>
         <button class="toolbar-button" @click="confirmRemoveTorrent">Remove</button>
