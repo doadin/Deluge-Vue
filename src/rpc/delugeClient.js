@@ -156,22 +156,39 @@ export default class DelugeClient {
     }
 
     async getTorrentStatus(torrentId) {
-        return this.rpc("web.get_torrent_status", [torrentId, [
-            "name",
-            "state",
-            "progress",
-            "download_speed",
-            "upload_speed",
-            "eta",
-            "ratio",
-            "total_size",
-            "num_seeds",
-            "num_peers",
-            "tracker_host",
-            "trackers",
-            "files",
-            "peers"
-        ]]);
+      return this.rpc("web.get_torrent_status", [torrentId, [
+        "ratio",
+        "total_size",
+        "total_uploaded",
+        "progress",
+        "name",
+        "state",
+        "upload_payload_rate",
+        "total_done",
+        "download_payload_rate",
+        "time_added",
+        "eta",
+        "time_since_transfer",
+        "last_seen_complete",
+        "distributed_copies",
+        "is_auto_managed",
+        "total_peers",
+        "queue",
+        "total_seeds",
+        "num_peers",
+        "max_download_speed",
+        "total_wanted",
+        "download_location",
+        "total_remaining",
+        "tracker_host",
+        "completed_time",
+        "seeds_peers_ratio",
+        "num_seeds",
+        "max_upload_speed",
+        "files",
+        "trackers",
+        "peers"
+      ]]);
     }
 
     async getTorrentFiles(torrentId) {

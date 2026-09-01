@@ -47,6 +47,24 @@ const formatEta = (value) => {
   return `${Math.round(value / 3600)}h`;
 };
 
+const formatDuration = (value) => {
+  const s = Number(value || 0);
+  if (!Number.isFinite(s) || s <= 0) return '—';
+  const hours = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return `${mins}m`;
+  return `${s}s`;
+};
+
+const getFirstValue = (obj, keys, fallback = null) => {
+  if (!obj) return fallback;
+  for (const k of keys) {
+    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== "") return obj[k];
+  }
+  return fallback;
+};
+
 const getStateLabel = (state) => {
   return String(state || "unknown").replace(/_/g, " ");
 };
@@ -59,8 +77,84 @@ const getStateClass = (state) => {
   return "default";
 };
 
-const selectTorrent = (torrent) => {
-  selectedTorrent.value = selectedTorrent.value?.id === torrent.id ? null : torrent;
+const activeTab = ref('Status');
+const tabLoading = ref({ Status: false, Details: false, Options: false, Files: false, Peers: false, Trackers: false });
+const files = ref(null);
+const peers = ref(null);
+const trackers = ref(null);
+
+const fetchTabData = async (tab) => {
+  const id = selectedTorrent.value?.id;
+  if (!id) return;
+  try {
+    tabLoading.value[tab] = true;
+    await client.login();
+    if (tab === 'Files' && files.value === null) {
+      const res = await client.getTorrentFiles(id);
+      files.value = res.files || res || [];
+    }
+    if (tab === 'Peers' && peers.value === null) {
+      const res = await client.getTorrentPeers(id);
+      peers.value = res || [];
+    }
+    if (tab === 'Trackers' && trackers.value === null) {
+      // getTorrentTrackers returns status with trackers field
+      const res = await client.getTorrentTrackers(id);
+      trackers.value = (res && res.trackers) || res || [];
+    }
+  } catch (e) {
+    console.error('Failed to load tab data', tab, e);
+  } finally {
+    tabLoading.value[tab] = false;
+  }
+};
+
+const selectTorrent = async (torrent) => {
+  try {
+    // toggle off if clicking the currently selected torrent
+    if (selectedTorrent.value?.id === torrent.id) {
+      selectedTorrent.value = null;
+      return;
+    }
+
+    await client.login();
+    // fetch expanded torrent status from the backend
+    const det = await client.getTorrentStatus(torrent.id);
+
+    // normalize speeds and merge with brief torrent info
+    const normalized = {
+      id: torrent.id,
+      name: det.name ?? torrent.name,
+      state: det.state ?? torrent.state,
+      progress: det.progress ?? torrent.progress,
+      total_size: det.total_size ?? torrent.total_size,
+      total_done: det.total_done ?? torrent.total_done,
+      total_uploaded: det.total_uploaded ?? torrent.total_uploaded,
+      download_speed: det.download_payload_rate ?? det.download_speed ?? torrent.download_speed ?? 0,
+      upload_speed: det.upload_payload_rate ?? det.upload_speed ?? torrent.upload_speed ?? 0,
+      eta: det.eta ?? torrent.eta,
+      time_added: det.time_added ?? torrent.time_added,
+      // include all returned properties so template can access them
+      ...det,
+    };
+
+    // reset tab-specific caches
+    files.value = null;
+    peers.value = null;
+    trackers.value = null;
+    activeTab.value = 'Status';
+
+    // if det included nested arrays for files/peers/trackers, seed them
+    if (det.files) files.value = det.files;
+    if (det.peers) peers.value = det.peers;
+    if (det.trackers) trackers.value = det.trackers;
+
+    selectedTorrent.value = normalized;
+  } catch (error) {
+    console.error('Failed to load torrent details:', error);
+    // fallback to the lightweight torrent object
+    selectedTorrent.value = torrent;
+  }
 };
 
 const sortBy = (key) => {
@@ -331,7 +425,16 @@ const refreshTorrents = async () => {
     }));
     if (selectedTorrent.value) {
       const updated = torrents.value.find((torrent) => torrent.id === selectedTorrent.value.id);
-      selectedTorrent.value = updated || normalizeTorrentData(selectedTorrent.value);
+      if (updated) {
+        // Merge updated lightweight fields into the existing detailed selectedTorrent
+        // so we don't lose fields that were fetched via getTorrentStatus()
+        selectedTorrent.value = {
+          ...selectedTorrent.value,
+          ...normalizeTorrentData(updated),
+        };
+      } else {
+        selectedTorrent.value = normalizeTorrentData(selectedTorrent.value);
+      }
     }
   } catch (error) {
     console.error("Failed to refresh torrents:", error);
@@ -523,7 +626,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- DETAILS PANEL -->
+    <!-- DETAILS PANEL (Tabbed) -->
     <div v-if="selectedTorrent" class="details-panel">
       <div class="details-content">
         <div class="details-header">
@@ -536,22 +639,225 @@ onUnmounted(() => {
           </span>
         </div>
 
-        <div class="details-grid">
-          <div>
-            <span class="detail-label">Progress</span>
-            <strong>{{ Number(selectedTorrent.progress || 0).toFixed(1) }}%</strong>
+        <div class="details-tabs">
+          <button
+            v-for="tab in ['Status','Details','Options','Files','Peers','Trackers']"
+            :key="tab"
+            :class="['details-tab', { active: activeTab === tab } ]"
+            @click="() => { activeTab = tab; fetchTabData(tab); }"
+          >
+            {{ tab }}
+          </button>
+        </div>
+
+        <div class="details-body">
+          <div v-show="activeTab === 'Status'" class="tab-panel status-panel">
+            <div class="details-grid">
+              <div>
+                <span class="detail-label">Downloaded</span>
+                <strong>{{ formatBytes(getFirstValue(selectedTorrent, ['total_done','downloaded','downloaded_bytes'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Down Speed</span>
+                <strong>{{ formatSpeed(getFirstValue(selectedTorrent, ['download_payload_rate','download_speed','download_rate'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Seeds</span>
+                <strong>
+                  {{ getFirstValue(selectedTorrent, ['num_seeds','seeds','num_seeds_live'], '—') }}
+                  ({{ getFirstValue(selectedTorrent, ['total_seeds','seeds_total'], '—') }})
+                </strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Active Time</span>
+                <strong>{{ formatDuration(getFirstValue(selectedTorrent, ['active_time','time_active','active_seconds'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Uploaded</span>
+                <strong>{{ formatBytes(getFirstValue(selectedTorrent, ['total_uploaded','uploaded'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Up Speed</span>
+                <strong>{{ formatSpeed(getFirstValue(selectedTorrent, ['upload_payload_rate','upload_speed','upload_rate'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Peers</span>
+                <strong>
+                  {{ getFirstValue(selectedTorrent, ['num_peers','peers','num_peers_live'], '—') }}
+                  ({{ getFirstValue(selectedTorrent, ['total_peers','peers_total'], '—') }})
+                </strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Seeding Time</span>
+                <strong>{{ formatDuration(getFirstValue(selectedTorrent, ['seeding_time','seed_time','time_seeding'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Share Ratio</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['ratio','share_ratio'], null) !== null ? Number(getFirstValue(selectedTorrent, ['ratio','share_ratio'])).toFixed(3) : '—' }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">ETA</span>
+                <strong>{{ formatEta(getFirstValue(selectedTorrent, ['eta'], null)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Availability</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['distributed_copies','availability','availability_text'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Last Transfer</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['last_transfer','last_seen_transfer','last_seen_complete'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Next Announce</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['next_announce','next_announce_in','tracker_next_announce'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Pieces</span>
+                <strong>
+                  {{ getFirstValue(selectedTorrent, ['pieces','num_pieces'], '—') }}
+                  ({{ formatBytes(getFirstValue(selectedTorrent, ['piece_length','piece_size'], 0)) }})
+                </strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Auto Managed</span>
+                <strong>{{ String(getFirstValue(selectedTorrent, ['is_auto_managed','auto_managed'], getFirstValue(selectedTorrent, ['is_auto_managed'], '—'))) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Tracker Status</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['tracker_status','tracker_state','tracker_status_message','tracker_status_msg'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Seed Rank</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['seed_rank','seed_rank_value','seedrank'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Date Added</span>
+                <strong>{{ formatDate(getFirstValue(selectedTorrent, ['time_added','date_added'], null)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Complete Seen</span>
+                <strong>{{ formatDate(getFirstValue(selectedTorrent, ['last_seen_complete','complete_seen'], null)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Completed</span>
+                <strong>{{ formatDate(getFirstValue(selectedTorrent, ['completed_time','time_completed'], null)) }}</strong>
+              </div>
+            </div>
           </div>
-          <div>
-            <span class="detail-label">Downloaded</span>
-            <strong>{{ formatBytes(selectedTorrent.total_done || 0) }}</strong>
+
+          <div v-show="activeTab === 'Details'" class="tab-panel details-panel-tab">
+            <div class="details-grid">
+              <div>
+                <span class="detail-label">Name</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['name','torrent_name'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Hash</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['hash','torrent_hash','infohash'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Download Folder</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['download_location','download_location_path','download_folder'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Total Size</span>
+                <strong>{{ formatBytes(getFirstValue(selectedTorrent, ['total_size','size','total_bytes'], 0)) }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Total Files</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['total_files','num_files','file_count'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Comment</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['comment','comments','description'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Status</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['tracker_status','status','state'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Tracker</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['tracker_host','tracker','trackers','announce'], '—') }}</strong>
+              </div>
+
+              <div>
+                <span class="detail-label">Created By</span>
+                <strong>{{ getFirstValue(selectedTorrent, ['created_by','creator','created_by_user'], '—') }}</strong>
+              </div>
+            </div>
           </div>
-          <div>
-            <span class="detail-label">Uploaded</span>
-            <strong>{{ formatBytes(selectedTorrent.total_uploaded || 0) }}</strong>
+
+          <div v-show="activeTab === 'Options'" class="tab-panel options-panel">
+            <p>Options (read-only)</p>
+            <div class="details-grid">
+              <div>
+                <span class="detail-label">Max Download</span>
+                <strong>{{ selectedTorrent.max_download_speed ? formatSpeed(selectedTorrent.max_download_speed) : '—' }}</strong>
+              </div>
+              <div>
+                <span class="detail-label">Max Upload</span>
+                <strong>{{ selectedTorrent.max_upload_speed ? formatSpeed(selectedTorrent.max_upload_speed) : '—' }}</strong>
+              </div>
+            </div>
           </div>
-          <div>
-            <span class="detail-label">ETA</span>
-            <strong>{{ formatEta(selectedTorrent.eta) }}</strong>
+
+          <div v-show="activeTab === 'Files'" class="tab-panel files-panel">
+            <div v-if="tabLoading.Files">Loading files…</div>
+            <div v-else>
+              <ul>
+                <li v-for="(f, idx) in files || selectedTorrent.files || []" :key="idx">
+                  {{ f.path || f[0] }} — {{ formatBytes(f.length || f[1] || 0) }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div v-show="activeTab.value === 'Peers'" class="tab-panel peers-panel">
+            <div v-if="tabLoading.Peers">Loading peers…</div>
+            <div v-else>
+              <ul>
+                <li v-for="(p, idx) in peers || selectedTorrent.peers || []" :key="idx">
+                  {{ p.ip || p.host || p.address }} — {{ p.client || p.client_name || p.client_version || 'peer' }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div v-show="activeTab === 'Trackers'" class="tab-panel trackers-panel">
+            <div v-if="tabLoading.Trackers">Loading trackers…</div>
+            <div v-else>
+              <ul>
+                <li v-for="(t, idx) in trackers || selectedTorrent.trackers || []" :key="idx">
+                  {{ t.url || t[0] || t.tracker }} — {{ t.status || t[1] || '—' }}
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>
@@ -623,5 +929,74 @@ onUnmounted(() => {
 .sidebar-button {
   transition: background-color 120ms ease, color 120ms ease;
 }
+
+.details-panel {
+  width: 360px;
+  border-left: 1px solid rgba(0,0,0,0.06);
+  background: #ffffff;
+  color: #111827;
+  overflow: auto;
+}
+
+/* Layout: sidebar | content | details */
+.torrent-page {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.sidebar {
+  flex: 0 0 220px;
+  max-width: 220px;
+}
+
+.content-shell {
+  flex: 1 1 0;
+  min-width: 0; /* allow child overflow handling */
+}
+
+.details-panel {
+  flex: 0 0 360px;
+  max-height: calc(100vh - 120px);
+  position: sticky;
+  top: 8px;
+}
+
+.details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+.details-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+
+.details-tab {
+  background: transparent;
+  border: none;
+  color: #374151;
+  padding: 8px 10px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.details-tab.active {
+  background: rgba(37,99,235,0.08);
+  color: #0f172a;
+  box-shadow: inset 0 -2px 0 var(--accent, #2563eb);
+}
+
+.details-body { padding: 12px; }
+.tab-panel { display: block; }
+.details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+.files-panel ul, .peers-panel ul, .trackers-panel ul { list-style: none; margin: 0; padding: 0; }
+.files-panel li, .peers-panel li, .trackers-panel li { padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.06); color: #374151; }
 </style>
 
