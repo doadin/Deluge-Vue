@@ -1,13 +1,22 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { getDelugeClient } from "../rpc/delugeClient";
 import Settings from "./Settings.vue";
 
 const client = getDelugeClient();
 const torrents = ref([]);
 const selectedTorrent = ref(null);
-const sortKey = ref("name");
-const sortOrder = ref("asc");
+// persist last-used sort settings in localStorage
+const sortKey = ref(localStorage.getItem('sortKey') || "name");
+const sortOrder = ref(localStorage.getItem('sortOrder') || "asc");
+
+watch(sortKey, (val) => {
+  try { localStorage.setItem('sortKey', val); } catch (e) { /* ignore */ }
+});
+
+watch(sortOrder, (val) => {
+  try { localStorage.setItem('sortOrder', val); } catch (e) { /* ignore */ }
+});
 const searchQuery = ref("");
 const showSettings = ref(false);
 const selectedState = ref('all');
@@ -390,13 +399,13 @@ onUnmounted(() => {
     <div class="sidebar">
       <div class="sidebar-section">
         <h4>States</h4>
-          <button class="sidebar-button" @click="selectedState = 'all'">All ({{ torrents.length }})</button>
-          <button class="sidebar-button" @click="selectedState = 'active'">Active ({{ activeCount }})</button>
-          <button class="sidebar-button" @click="selectedState = 'checking'">Checking ({{ checkingCount }})</button>
-          <button class="sidebar-button" @click="selectedState = 'downloading'">Downloading ({{ downloadingCount }})</button>
-          <button class="sidebar-button" @click="selectedState = 'seeding'">Seeding ({{ seedingCount }})</button>
-          <button class="sidebar-button" @click="selectedState = 'paused'">Paused ({{ pausedCount }})</button>
-          <button class="sidebar-button" @click="selectedState = 'error'">Error ({{ errorCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'all' }" @click="selectedState = 'all'">All ({{ torrents.length }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'active' }" @click="selectedState = 'active'">Active ({{ activeCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'checking' }" @click="selectedState = 'checking'">Checking ({{ checkingCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'downloading' }" @click="selectedState = 'downloading'">Downloading ({{ downloadingCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'seeding' }" @click="selectedState = 'seeding'">Seeding ({{ seedingCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'paused' }" @click="selectedState = 'paused'">Paused ({{ pausedCount }})</button>
+          <button class="sidebar-button" :class="{ active: selectedState === 'error' }" @click="selectedState = 'error'">Error ({{ errorCount }})</button>
       </div>
 
       <div class="sidebar-section">
@@ -602,4 +611,17 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Active state for sidebar buttons */
+.sidebar-button.active {
+  background-color: var(--accent, #2563eb);
+  color: #fff;
+  border-left: 4px solid rgba(255,255,255,0.12);
+}
+
+.sidebar-button {
+  transition: background-color 120ms ease, color 120ms ease;
+}
+</style>
 
