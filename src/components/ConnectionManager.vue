@@ -92,11 +92,7 @@ async function refresh() {
     }
 
     const candidateMethods = [
-      'web.get_hosts',       // documented endpoint
-      'web.get_daemon_list',
-      'daemon.get_hosts',
-      'web.get_servers',
-      'core.get_daemons'
+      'web.get_hosts'       // documented endpoint
     ];
 
     let found = false;

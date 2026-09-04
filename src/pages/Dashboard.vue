@@ -3,10 +3,6 @@ import { ref } from "vue";
 
 // Components
 import TorrentList from "../components/TorrentList.vue";
-import TorrentDetails from "../components/TorrentDetails.vue";
-import AddTorrent from "../components/AddTorrent.vue";
-import GlobalControls from "../components/GlobalControls.vue";
-import ThemeToggle from "../components/ThemeToggle.vue";
 
 const selectedTorrentId = ref(null);
 

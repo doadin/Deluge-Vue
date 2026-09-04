@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { buildFileTree } from "../utils/buildFileTree";
+import { ref, computed , reactive , onMounted, onUnmounted, watch } from "vue";
 import { getDelugeClient } from "../rpc/delugeClient";
 import Settings from "./Settings.vue";
 
@@ -83,6 +84,123 @@ const files = ref(null);
 const peers = ref(null);
 const trackers = ref(null);
 
+// Files tree UI state and helpers
+const fileTreeRoot = computed(() => {
+  const src = files.value || selectedTorrent.value?.files || [];
+  try {
+    return buildFileTree(Array.isArray(src) ? src : []);
+  } catch (e) {
+    console.debug("Failed building file tree", e);
+    return {};
+  }
+});
+
+const expandedFolders = reactive(new Set());
+
+// helpers to read file objects (support array or object shapes)
+const _fileSize = (file) => {
+  if (!file) return 0;
+  return Number(file.length ?? file[1] ?? 0) || 0;
+};
+const _fileProgress = (file) => {
+  if (!file) return 0;
+  const raw = file.progress ?? file.percent ?? file[2] ?? 0;
+  const n = Number(raw) || 0;
+  return n > 1 ? n : n * 100;
+};
+const _filePriority = (file) => {
+  if (!file) return '—';
+  return file.priority ?? file[2] ?? (Array.isArray(file) && file[2] ? file[2] : 'Normal');
+};
+
+// recursively compute aggregated folder size and collect rows
+const buildRows = (node, parentPath = "", depth = 0, rows = []) => {
+  const keys = Object.keys(node).sort();
+  let folderTotal = 0;
+  for (const key of keys) {
+    const item = node[key];
+    const isFile = Boolean(item.__file);
+    const path = parentPath ? `${parentPath}/${key}` : key;
+    if (isFile) {
+      const fileObj = item.__file;
+      const size = _fileSize(fileObj);
+      rows.push({
+        key: `${path}::file::${item.__index ?? rows.length}`,
+        name: key,
+        path,
+        isFolder: false,
+        size,
+        progress: _fileProgress(fileObj),
+        priority: _filePriority(fileObj),
+        depth,
+      });
+      folderTotal += size;
+    } else {
+      // folder: compute subtree and its size
+      const subtreeRowsBefore = rows.length;
+      const subtreeTotal = buildRows(item.__children, path, depth + 1, rows);
+      const folderSize = subtreeTotal;
+      rows.splice(subtreeRowsBefore, 0, {
+        key: `${path}::folder`,
+        name: key,
+        path,
+        isFolder: true,
+        size: folderSize,
+        progress: null,
+        priority: null,
+        depth,
+      });
+      folderTotal += folderSize;
+    }
+  }
+  return folderTotal;
+};
+
+const fileRows = computed(() => {
+  const rows = [];
+  buildRows(fileTreeRoot.value, "", 0, rows);
+  // The buildRows placed folder rows before their children; now filter out collapsed children
+  const visible = [];
+  const folderStack = [];
+  for (const r of rows) {
+    if (r.isFolder) {
+      visible.push(r);
+      // folder expansion state controls visibility of following descendants with greater depth
+      // we keep a map of which depths are currently collapsed by folder path
+    } else {
+      // check ancestor expansion: ensure every ancestor folder in the path is expanded
+      const ancestors = r.path.split("/");
+      let ok = true;
+      let cur = "";
+      for (let i = 0; i < ancestors.length - 1; i++) {
+        cur = cur ? cur + "/" + ancestors[i] : ancestors[i];
+        if (!expandedFolders.has(cur)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) visible.push(r);
+    }
+  }
+  return visible;
+});
+
+const toggleFolder = (path) => {
+  if (expandedFolders.has(path)) expandedFolders.delete(path);
+  else expandedFolders.add(path);
+};
+
+// convert 0..1 or 0..100 progress to percent 0..100
+const peerProgressPct = (p) => {
+  const v = p?.progress ?? p?.percent ?? 0;
+  const n = Number(v) || 0;
+  return n > 1 ? n : n * 100;
+};
+
+watch(peers, (val) => {
+  console.debug('Peers updated:', val);
+}, { deep: true });
+
 const fetchTabData = async (tab) => {
   const id = selectedTorrent.value?.id;
   if (!id) return;
@@ -108,6 +226,16 @@ const fetchTabData = async (tab) => {
     tabLoading.value[tab] = false;
   }
 };
+
+// auto-refresh peers when selection changes and Peers tab is open
+watch(
+  () => [selectedTorrent.value?.id, activeTab.value],
+  ([id, tab]) => {
+    if (tab === 'Peers' && id) {
+      fetchTabData('Peers');
+    }
+  }
+);
 
 const selectTorrent = async (torrent) => {
   try {
@@ -150,6 +278,7 @@ const selectTorrent = async (torrent) => {
     if (det.trackers) trackers.value = det.trackers;
 
     selectedTorrent.value = normalized;
+    console.debug('Selected torrent details:', normalized);
   } catch (error) {
     console.error('Failed to load torrent details:', error);
     // fallback to the lightweight torrent object
@@ -542,6 +671,7 @@ onUnmounted(() => {
         <button class="toolbar-button" @click="() => runTorrentAction((id) => client.queueUp(id), 'move the selected torrent up in the queue')">↑</button>
         <button class="toolbar-button" @click="() => runTorrentAction((id) => client.queueDown(id), 'move the selected torrent down in the queue')">↓</button>
         <button class="toolbar-button" @click="() => runTorrentAction((id) => client.queueTop(id), 'move the selected torrent to the top of the queue')">Queue Top</button>
+        <button class="toolbar-button" @click="() => client.webDisconnectDaemon()">Log Out</button>
         <button class="toolbar-button" @click="openSettings">Preferences</button>
       </div>
 
@@ -627,7 +757,7 @@ onUnmounted(() => {
     </div>
 
     <!-- DETAILS PANEL (Tabbed) -->
-    <div v-if="selectedTorrent" class="details-panel">
+    <div v-if="selectedTorrent" class="details-panel bottom">
       <div class="details-content">
         <div class="details-header">
           <div>
@@ -638,13 +768,13 @@ onUnmounted(() => {
             {{ getStateLabel(selectedTorrent.state) }}
           </span>
         </div>
-
+    
         <div class="details-tabs">
           <button
             v-for="tab in ['Status','Details','Options','Files','Peers','Trackers']"
             :key="tab"
             :class="['details-tab', { active: activeTab === tab } ]"
-            @click="() => { activeTab = tab; fetchTabData(tab); }"
+            @click="activeTab = tab; fetchTabData(tab)"
           >
             {{ tab }}
           </button>
@@ -830,22 +960,77 @@ onUnmounted(() => {
           <div v-show="activeTab === 'Files'" class="tab-panel files-panel">
             <div v-if="tabLoading.Files">Loading files…</div>
             <div v-else>
-              <ul>
-                <li v-for="(f, idx) in files || selectedTorrent.files || []" :key="idx">
-                  {{ f.path || f[0] }} — {{ formatBytes(f.length || f[1] || 0) }}
-                </li>
-              </ul>
+              <div class="files-table">
+                <div class="files-header">
+                  <div class="col name">Filename</div>
+                  <div class="col size">Size</div>
+                  <div class="col progress">Progress</div>
+                  <div class="col priority">Priority</div>
+                </div>
+          
+                <div class="files-body">
+                  <div
+                    v-for="row in fileRows"
+                    :key="row.key"
+                    class="file-row"
+                    :class="{ folder: row.isFolder }"
+                    :style="{ paddingLeft: (row.depth * 12) + 'px' }"
+                  >
+                    <div class="col name">
+                      <button v-if="row.isFolder" class="folder-toggle" @click="toggleFolder(row.path)">
+                        <span v-if="expandedFolders.has(row.path)">▾</span>
+                        <span v-else>▸</span>
+                      </button>
+                      <span class="file-name">{{ row.name }}</span>
+                    </div>
+          
+                    <div class="col size">{{ formatBytes(row.size) }}</div>
+          
+                    <div class="col progress">
+                      <div v-if="!row.isFolder" class="progress-wrap">
+                        <div class="progress-bar">
+                          <div class="progress-fill" :style="{ width: Math.min(100, Math.max(0, row.progress || 0)) + '%' }"></div>
+                        </div>
+                        <span class="progress-text">{{ (row.progress || 0).toFixed(1) }}%</span>
+                      </div>
+                      <div v-else class="folder-meta">{{ row.size ? formatBytes(row.size) : '' }}</div>
+                    </div>
+          
+                    <div class="col priority">{{ row.isFolder ? '' : row.priority }}</div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div v-show="activeTab.value === 'Peers'" class="tab-panel peers-panel">
+          <div v-show="activeTab === 'Peers'" class="tab-panel peers-panel">
             <div v-if="tabLoading.Peers">Loading peers…</div>
             <div v-else>
-              <ul>
-                <li v-for="(p, idx) in peers || selectedTorrent.peers || []" :key="idx">
-                  {{ p.ip || p.host || p.address }} — {{ p.client || p.client_name || p.client_version || 'peer' }}
-                </li>
-              </ul>
+                <ul>
+                  <li v-for="(p, idx) in peers || selectedTorrent.peers || []" :key="idx" class="peer-row">
+                    <div class="peer-main">
+                        <div class="peer-ip">{{ p.ip || p.host || p.address || '—' }}</div>
+                        <div class="peer-client">{{ p.client || p.client_name || p.client_version || 'peer' }} <span class="peer-country" v-if="p.country">• {{ p.country }}</span> </div>
+                    </div>
+                    <div class="peer-stats">
+                      <div class="peer-speed">
+                        ↓ {{ formatSpeed(p.down_speed || p.downspeed || p.download_speed || 0) }}
+                        •
+                        ↑ {{ formatSpeed(p.up_speed || p.upspeed || p.upload_speed || 0) }}
+                      </div>
+                
+                      <div class="peer-progress">
+                        <div class="peer-progress-bar">
+                          <div class="peer-progress-fill"
+                               :style="{ width: `${Math.min(100, Math.max(0, peerProgressPct(p)))}%` }"></div>
+                        </div>
+                        <span class="peer-progress-text">{{ peerProgressPct(p).toFixed(1) }}%</span>
+                      </div>
+                
+                      <div class="peer-seed">Seed: {{ p.seed ?? p.seeder ?? 0 }}</div>
+                    </div>
+                  </li>
+                </ul> 
             </div>
           </div>
 
@@ -917,86 +1102,3 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-/* Active state for sidebar buttons */
-.sidebar-button.active {
-  background-color: var(--accent, #2563eb);
-  color: #fff;
-  border-left: 4px solid rgba(255,255,255,0.12);
-}
-
-.sidebar-button {
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.details-panel {
-  width: 360px;
-  border-left: 1px solid rgba(0,0,0,0.06);
-  background: #ffffff;
-  color: #111827;
-  overflow: auto;
-}
-
-/* Layout: sidebar | content | details */
-.torrent-page {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.sidebar {
-  flex: 0 0 220px;
-  max-width: 220px;
-}
-
-.content-shell {
-  flex: 1 1 0;
-  min-width: 0; /* allow child overflow handling */
-}
-
-.details-panel {
-  flex: 0 0 360px;
-  max-height: calc(100vh - 120px);
-  position: sticky;
-  top: 8px;
-}
-
-.details-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(0,0,0,0.06);
-}
-
-.details-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(0,0,0,0.04);
-}
-
-.details-tab {
-  background: transparent;
-  border: none;
-  color: #374151;
-  padding: 8px 10px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-
-.details-tab.active {
-  background: rgba(37,99,235,0.08);
-  color: #0f172a;
-  box-shadow: inset 0 -2px 0 var(--accent, #2563eb);
-}
-
-.details-body { padding: 12px; }
-.tab-panel { display: block; }
-.details-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-
-.files-panel ul, .peers-panel ul, .trackers-panel ul { list-style: none; margin: 0; padding: 0; }
-.files-panel li, .peers-panel li, .trackers-panel li { padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.06); color: #374151; }
-</style>
-

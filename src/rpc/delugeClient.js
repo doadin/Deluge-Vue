@@ -210,10 +210,6 @@ export default class DelugeClient {
         }]]);
     }
 
-    async getTorrentPeers(torrentId) {
-        return this.rpc("web.get_torrent_peers", [torrentId]);
-    }
-
     async getTorrentTrackers(torrentId) {
         return this.rpc("web.get_torrent_status", [
             torrentId,
@@ -295,6 +291,10 @@ export default class DelugeClient {
 
     async getWebConfig() {
         return this.rpc("web.get_config", []);
+    }
+
+    async webDisconnectDaemon() {
+        return this.rpc("web.disconnect", []);
     }
 
     async getSessionStatus(keys = []) {
